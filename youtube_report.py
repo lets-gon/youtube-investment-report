@@ -245,9 +245,13 @@ def build_prompt(payload: dict) -> str:
         - 영상을 보지 않은 사람도 메시지를 이해하게 제목/설명/게시물 내용을 바탕으로 핵심 논리를 빠짐없이 정리한다.
         - 확실히 데이터에 없는 내용은 추정이라고 표현한다.
         - 'N가지', '6가지 원인', '3가지 핵심'처럼 숫자로 묶인 설명은 각 항목을 하나씩 풀어쓴다.
-        - 마지막은 Fact, Opnion, Insight, Recommendation 섹션의 checklist로 작성한다.
-        - checklist 각 줄에는 대괄호로 출처 유튜버명만 남긴다. 예: [asset.x2] 6월 19일까지 보수적으로 접근
-        - 고등학생이 모를 만한 용어는 각주 형식 [^1]으로 설명한다.
+        - 텔레그램 일반 텍스트 메시지로 보낼 것이므로 마크다운 문법을 쓰지 않는다.
+        - '#', '##', '**', '*', '---', 표, 코드블록, 각주 표기 '[^1]' 같은 기호를 쓰지 않는다.
+        - 제목은 '1. 한눈에 보는 핵심'처럼 일반 문장형 번호 제목으로 쓴다.
+        - 항목 구분은 '1)', '2)', '3)' 또는 짧은 문단으로만 표현한다.
+        - 마지막은 Fact, Opnion, Insight, Recommendation 섹션으로 작성한다.
+        - 마지막 섹션의 각 줄은 '출처: 유튜버명 | 내용' 형식으로 작성한다.
+        - 고등학생이 모를 만한 용어는 마지막에 '용어 설명' 섹션을 만들고 '용어: 쉬운 설명' 형식으로 설명한다.
         - 'Opinion' 철자는 사용자가 선호한 'Opnion'으로 쓴다.
         - 투자 조언은 단정하지 말고 리스크 점검 중심으로 쓴다.
 
@@ -255,6 +259,23 @@ def build_prompt(payload: dict) -> str:
         {json.dumps(payload, ensure_ascii=False, indent=2)}
         """
     ).strip()
+
+
+def plain_text_report(message: str) -> str:
+    """Remove common markdown marks so Telegram shows a clean plain-text report."""
+    lines = []
+    for raw_line in message.splitlines():
+        line = raw_line.strip()
+        line = re.sub(r"^#{1,6}\s*", "", line)
+        line = re.sub(r"^\s*[-*]\s+", "· ", line)
+        if re.fullmatch(r"-{3,}", line):
+            continue
+        line = line.replace("**", "").replace("__", "").replace("`", "")
+        line = re.sub(r"\[\^(\d+)\]", r"(용어 설명 \1)", line)
+        lines.append(line)
+    text = "\n".join(lines)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def call_openai(prompt: str) -> str:
@@ -342,7 +363,7 @@ def main() -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
 
-    report = call_openai(build_prompt(payload))
+    report = plain_text_report(call_openai(build_prompt(payload)))
     print(report)
     send_telegram(report)
     return 0
