@@ -258,7 +258,7 @@ def build_prompt(payload: dict) -> str:
 
 
 def call_openai(prompt: str) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = re.sub(r"\s+", "", os.getenv("OPENAI_API_KEY", ""))
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
     body = {
