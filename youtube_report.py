@@ -46,7 +46,12 @@ CHANNELS = [
     Channel("한경 글로벌마켓", "주식", "https://www.youtube.com/@hkglobalmarket", "UCWskYkV4c4S9D__rsfOl2JA"),
     Channel("부읽남TV", "부동산", "https://www.youtube.com/@buiknam_tv", "UC2QeHNJFfuQWB4cy3M-745g"),
     Channel("작가 송희구", "부동산", "https://www.youtube.com/@thewriter-song", "UCrxr7eBgbKdz0e1t5ax9kCg"),
-    Channel("월급쟁이부자들TV", "부동산", "https://www.youtube.com/@weolbu_official", "UCDSj40X9FFUAnx1nv7gQhcA"),
+    Channel(
+        "새벽보기Live",
+        "부동산",
+        "https://www.youtube.com/@%EC%83%88%EB%B2%BD%EB%B3%B4%EA%B8%B0%EB%9D%BC%EC%9D%B4%EB%B8%8C",
+        "UCcp1GsUZnKPf8AbbxAzUGfw",
+    ),
     Channel("집코노미", "부동산", "https://www.youtube.com/@jipconomy", "UCAVdqlngIAxHtwlCA2hjv3A"),
 ]
 
