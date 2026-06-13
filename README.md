@@ -29,9 +29,14 @@ GitHub Actions가 매일 YouTube 채널 8개의 최근 24시간 콘텐츠를 확
    - `OPENAI_API_KEY`
    - `TELEGRAM_BOT_TOKEN`
    - `TELEGRAM_CHAT_ID`
+   - `GOOGLE_SERVICE_ACCOUNT_JSON`: Google Drive 업로드용 서비스 계정 JSON 전체 내용
 3. 필요하면 `Settings → Secrets and variables → Actions → Variables`에 `OPENAI_MODEL`을 추가합니다.
    - 기본값은 `gpt-5.4-mini`입니다.
-4. `Actions → YouTube Investment Report → Run workflow`로 수동 실행해 테스트합니다.
+4. Google Drive 자동 저장을 쓰려면 `Settings → Secrets and variables → Actions → Variables`에 아래 값을 추가합니다.
+   - `GOOGLE_DRIVE_FOLDER_ID`: 저장할 Drive 폴더 ID
+   - 현재 `#1 Codex` 폴더 ID는 `1BARJn6eLdb_OL558mEDT3ztYWErYDBbR`입니다.
+5. Google Cloud에서 만든 서비스 계정 이메일을 Google Drive의 `#1 Codex` 폴더에 편집자 권한으로 공유합니다.
+6. `Actions → YouTube Investment Report → Run workflow`로 수동 실행해 테스트합니다.
 
 ## 저장 구조
 
@@ -72,7 +77,26 @@ out
 - `database`: SQLite 최신 누적본입니다.
 - `backups`: 날짜별 SQLite 백업입니다.
 
-Google Drive 업로드를 붙일 때도 이 구조를 그대로 올리는 것을 전제로 합니다.
+Google Drive 자동 저장을 켜면 위 `out/` 내부 구조가 지정한 Drive 폴더 안에 그대로 만들어집니다. 같은 경로의 파일이 이미 있으면 새 파일을 중복 생성하지 않고 갱신합니다.
+
+예를 들어 `#1 Codex` 폴더에는 아래처럼 저장됩니다.
+
+```text
+#1 Codex
+├── manifest
+│   ├── latest.json
+│   ├── drive_uploads.json
+│   ├── reports_manifest.jsonl
+│   └── items_manifest.jsonl
+├── raw/YYYY/MM/DD/raw_sources.json
+├── normalized/YYYY/MM/DD/*.jsonl
+├── reports/html/YYYY/MM/DD/report.html
+├── reports/telegram/YYYY/MM/DD/telegram.html
+├── database/investment_insights.sqlite
+└── backups/YYYY/MM/DD/investment_insights.sqlite
+```
+
+LLM이 나중에 읽을 때는 `manifest/latest.json`을 먼저 읽고, 필요한 파일 경로와 Drive URL을 따라가면 됩니다. 최신 누적 데이터베이스는 항상 `database/investment_insights.sqlite`입니다.
 
 ## 텔레그램 봇 만들기
 

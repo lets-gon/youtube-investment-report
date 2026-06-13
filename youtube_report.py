@@ -28,6 +28,7 @@ WINDOW_HOURS = int(os.getenv("WINDOW_HOURS", "24"))
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
 MAX_COMMUNITY_POSTS = int(os.getenv("MAX_COMMUNITY_POSTS", "8"))
 OUTPUT_ROOT = Path(os.getenv("OUTPUT_ROOT", "out"))
+GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
 
 
 @dataclass(frozen=True)
@@ -394,6 +395,178 @@ def send_telegram(message: str, parse_mode: Optional[str] = None) -> None:
     req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data, method="POST")
     with urllib.request.urlopen(req, timeout=30) as res:
         res.read()
+
+
+def request_json(
+    url: str,
+    *,
+    method: str = "GET",
+    token: str,
+    body: Optional[bytes] = None,
+    content_type: str = "application/json",
+) -> dict:
+    headers = {"Authorization": f"Bearer {token}"}
+    if body is not None:
+        headers["Content-Type"] = content_type
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=45) as res:
+        return json.loads(res.read().decode("utf-8"))
+
+
+def drive_access_token() -> Optional[str]:
+    credentials_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    if not credentials_json or not GOOGLE_DRIVE_FOLDER_ID:
+        return None
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2 import service_account
+    except ImportError as exc:
+        raise RuntimeError("Google Drive upload requires google-auth. Install requirements.txt first.") from exc
+
+    credentials_info = json.loads(credentials_json)
+    credentials = service_account.Credentials.from_service_account_info(
+        credentials_info,
+        scopes=["https://www.googleapis.com/auth/drive"],
+    )
+    credentials.refresh(Request())
+    return credentials.token
+
+
+class GoogleDriveArchive:
+    def __init__(self, token: str, root_folder_id: str):
+        self.token = token
+        self.root_folder_id = root_folder_id
+        self.folder_cache: dict[tuple[str, str], str] = {}
+
+    def ensure_folder(self, parent_id: str, name: str) -> str:
+        cache_key = (parent_id, name)
+        if cache_key in self.folder_cache:
+            return self.folder_cache[cache_key]
+        query = (
+            f"name = '{self.escape_query(name)}' and "
+            "mimeType = 'application/vnd.google-apps.folder' and "
+            f"'{parent_id}' in parents and trashed = false"
+        )
+        params = urllib.parse.urlencode({"q": query, "fields": "files(id,name)", "pageSize": "1"})
+        data = request_json(f"https://www.googleapis.com/drive/v3/files?{params}", token=self.token)
+        files = data.get("files", [])
+        if files:
+            folder_id = files[0]["id"]
+        else:
+            metadata = {
+                "name": name,
+                "mimeType": "application/vnd.google-apps.folder",
+                "parents": [parent_id],
+            }
+            data = request_json(
+                "https://www.googleapis.com/drive/v3/files?fields=id,name",
+                method="POST",
+                token=self.token,
+                body=json.dumps(metadata).encode("utf-8"),
+            )
+            folder_id = data["id"]
+        self.folder_cache[cache_key] = folder_id
+        return folder_id
+
+    def ensure_path(self, relative_parent: Path) -> str:
+        folder_id = self.root_folder_id
+        for part in relative_parent.parts:
+            folder_id = self.ensure_folder(folder_id, part)
+        return folder_id
+
+    def find_file(self, parent_id: str, name: str) -> Optional[str]:
+        query = f"name = '{self.escape_query(name)}' and '{parent_id}' in parents and trashed = false"
+        params = urllib.parse.urlencode({"q": query, "fields": "files(id,name)", "pageSize": "1"})
+        data = request_json(f"https://www.googleapis.com/drive/v3/files?{params}", token=self.token)
+        files = data.get("files", [])
+        return files[0]["id"] if files else None
+
+    def upload_file(self, local_path: Path, relative_path: Path) -> dict:
+        parent_id = self.ensure_path(relative_path.parent)
+        existing_id = self.find_file(parent_id, relative_path.name)
+        metadata = {"name": relative_path.name}
+        if existing_id is None:
+            metadata["parents"] = [parent_id]
+        content = local_path.read_bytes()
+        mime_type = guess_mime_type(local_path)
+        boundary = "codex_drive_boundary"
+        body = (
+            f"--{boundary}\r\n"
+            "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+            f"{json.dumps(metadata, ensure_ascii=False)}\r\n"
+            f"--{boundary}\r\n"
+            f"Content-Type: {mime_type}\r\n\r\n"
+        ).encode("utf-8") + content + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        if existing_id:
+            url = f"https://www.googleapis.com/upload/drive/v3/files/{existing_id}?uploadType=multipart&fields=id,name,webViewLink"
+            method = "PATCH"
+        else:
+            url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink"
+            method = "POST"
+        data = request_json(
+            url,
+            method=method,
+            token=self.token,
+            body=body,
+            content_type=f"multipart/related; boundary={boundary}",
+        )
+        return {
+            "file_id": data["id"],
+            "name": data["name"],
+            "drive_path": str(relative_path),
+            "url": data.get("webViewLink", f"https://drive.google.com/file/d/{data['id']}/view"),
+        }
+
+    @staticmethod
+    def escape_query(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def guess_mime_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    return {
+        ".html": "text/html",
+        ".json": "application/json",
+        ".jsonl": "application/x-ndjson",
+        ".sqlite": "application/vnd.sqlite3",
+        ".sql": "application/sql",
+        ".txt": "text/plain",
+    }.get(suffix, "application/octet-stream")
+
+
+def upload_output_to_drive(root: Path) -> list[dict]:
+    token = drive_access_token()
+    if not token:
+        print("Google Drive upload skipped; GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_DRIVE_FOLDER_ID is not set.", file=sys.stderr)
+        return []
+    archive = GoogleDriveArchive(token, GOOGLE_DRIVE_FOLDER_ID)
+    uploaded = []
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            uploaded.append(archive.upload_file(path, path.relative_to(root)))
+    return uploaded
+
+
+def update_drive_urls_in_sqlite(db_path: Path, report_id: str, uploaded: list[dict]) -> None:
+    urls_by_name = {item["name"]: item["url"] for item in uploaded}
+    with sqlite3.connect(db_path) as conn:
+        for file_name, drive_url in urls_by_name.items():
+            conn.execute(
+                "UPDATE report_files SET drive_url = ? WHERE report_id = ? AND file_name = ?",
+                (drive_url, report_id, file_name),
+            )
+
+
+def upload_selected_drive_files(paths: list[Path], root: Path) -> list[dict]:
+    token = drive_access_token()
+    if not token:
+        return []
+    archive = GoogleDriveArchive(token, GOOGLE_DRIVE_FOLDER_ID)
+    uploaded = []
+    for path in paths:
+        if path.exists() and path.is_file():
+            uploaded.append(archive.upload_file(path, path.relative_to(root)))
+    return uploaded
 
 
 def report_paths(report_date: str) -> dict[str, Path]:
@@ -897,6 +1070,27 @@ def main() -> int:
     for item in items:
         append_jsonl(paths["manifest"] / "items_manifest.jsonl", {**manifest_row, **item})
     write_json(paths["manifest"] / "latest.json", manifest_row)
+
+    drive_uploads = upload_output_to_drive(OUTPUT_ROOT)
+    if drive_uploads:
+        report_html_url = next((item["url"] for item in drive_uploads if item["drive_path"] == str(html_path.relative_to(OUTPUT_ROOT))), "")
+        if report_html_url:
+            os.environ["REPORT_HTML_URL"] = report_html_url
+            telegram_html = render_telegram_html(payload, structured, html_path)
+            telegram_path.write_text(telegram_html + "\n", encoding="utf-8")
+        write_json(paths["manifest"] / "drive_uploads.json", drive_uploads)
+        manifest_row["google_drive"] = {
+            "folder_id": GOOGLE_DRIVE_FOLDER_ID,
+            "uploaded_count": len(drive_uploads),
+            "html_url": report_html_url,
+            "files": drive_uploads,
+        }
+        write_json(paths["manifest"] / "latest.json", manifest_row)
+        update_drive_urls_in_sqlite(db_path, report_id, drive_uploads)
+        upload_selected_drive_files(
+            [db_path, paths["manifest"] / "latest.json", paths["manifest"] / "drive_uploads.json", telegram_path],
+            OUTPUT_ROOT,
+        )
 
     print(telegram_html)
     send_telegram(telegram_html, parse_mode="HTML")
