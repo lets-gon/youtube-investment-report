@@ -27,3 +27,11 @@ jobs:
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.4-mini' }}
           WINDOW_HOURS: "24"
         run: python youtube_report.py
+
+      - name: Upload generated data archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: investment-insights-data
+          path: out
+          if-no-files-found: error
+          retention-days: 30
