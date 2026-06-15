@@ -6,6 +6,13 @@ on:
     - cron: "50 23 * * *"
   workflow_dispatch:
 
+concurrency:
+  group: youtube-investment-report-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   report:
     runs-on: ubuntu-latest
