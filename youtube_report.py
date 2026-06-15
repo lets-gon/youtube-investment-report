@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import sqlite3
 import sys
 import textwrap
@@ -29,6 +30,14 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
 MAX_COMMUNITY_POSTS = int(os.getenv("MAX_COMMUNITY_POSTS", "8"))
 OUTPUT_ROOT = Path(os.getenv("OUTPUT_ROOT", "out"))
 GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
+HTTPS_CONTEXT: Optional[ssl.SSLContext] = None
+
+try:
+    import certifi
+
+    HTTPS_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    HTTPS_CONTEXT = None
 
 
 @dataclass(frozen=True)
@@ -83,7 +92,7 @@ def request_text(url: str, timeout: int = 25) -> str:
             "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
         },
     )
-    with urllib.request.urlopen(req, timeout=timeout) as res:
+    with urllib.request.urlopen(req, timeout=timeout, context=HTTPS_CONTEXT) as res:
         return res.read().decode("utf-8", "ignore")
 
 
@@ -365,7 +374,7 @@ def call_openai(prompt: str) -> str:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=90) as res:
+        with urllib.request.urlopen(req, timeout=90, context=HTTPS_CONTEXT) as res:
             data = json.loads(res.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "ignore")
@@ -393,7 +402,7 @@ def send_telegram(message: str, parse_mode: Optional[str] = None) -> None:
         params["parse_mode"] = parse_mode
     data = urllib.parse.urlencode(params).encode("utf-8")
     req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data, method="POST")
-    with urllib.request.urlopen(req, timeout=30) as res:
+    with urllib.request.urlopen(req, timeout=30, context=HTTPS_CONTEXT) as res:
         res.read()
 
 
@@ -409,7 +418,7 @@ def request_json(
     if body is not None:
         headers["Content-Type"] = content_type
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=45) as res:
+    with urllib.request.urlopen(req, timeout=45, context=HTTPS_CONTEXT) as res:
         return json.loads(res.read().decode("utf-8"))
 
 
@@ -972,24 +981,63 @@ def render_telegram_html(payload: dict, structured: dict, html_path: Path) -> st
     detail_line = (
         f'<a href="{escape(drive_url)}">상세 HTML 리포트 보기</a>'
         if drive_url
-        else f"상세 HTML 리포트: {escape(str(html_path))}"
+        else "상세 HTML 리포트는 GitHub Actions 실행 결과의 artifact에서 확인할 수 있습니다."
     )
-    return textwrap.dedent(
-        f"""\
-        <b>{escape(telegram.get('headline') or report.get('title') or payload['report_id'])}</b>
+    item_lookup = {item["item_id"]: item for item in source_items(payload)}
+    summaries = structured.get("item_summaries", []) or []
 
-        <b>핵심 요약</b>
-        {escape(telegram.get('summary') or report.get('overall_summary', ''))}
+    def shorten(value: str, limit: int) -> str:
+        text = " ".join(str(value or "").split())
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3].rstrip() + "..."
 
-        <b>오늘의 키워드</b>
-        {escape(keyword_text)}
+    def category_lines(category: str, limit: int = 4) -> str:
+        lines = []
+        for summary in summaries:
+            item = item_lookup.get(summary.get("source_id"))
+            if not item or item["category"] != category:
+                continue
+            text = summary.get("summary") or item.get("raw_description") or "요약 없음"
+            lines.append(f"- {item['channel_name']}: {shorten(text, 190)}")
+            if len(lines) >= limit:
+                break
+        return "\n".join(lines) if lines else "- 최근 24시간 기준으로 정리할 신규 항목이 없습니다."
 
-        <b>주의점</b>
-        {escape(telegram.get('risk_note') or report.get('market_mood', ''))}
+    def checklist_lines(section: str, limit: int = 2) -> str:
+        rows = []
+        for row in (structured.get("checklist") or {}).get(section, []) or []:
+            source = row.get("source_channel") or "출처 미상"
+            content = shorten(row.get("content", ""), 150)
+            if content:
+                rows.append(f"- {section}: {content} ({source})")
+            if len(rows) >= limit:
+                break
+        return "\n".join(rows) if rows else f"- {section}: 정리된 항목 없음"
 
-        <b>상세 리포트</b>
-        {detail_line}
-        """
+    conclusion = shorten(telegram.get("summary") or report.get("overall_summary", ""), 520)
+    stock_lines = category_lines("주식")
+    real_estate_lines = category_lines("부동산")
+    checklist_text = "\n".join(
+        [
+            checklist_lines("Fact"),
+            checklist_lines("Opnion"),
+            checklist_lines("Insight"),
+            checklist_lines("Recommendation"),
+        ]
+    )
+    risk_note = shorten(telegram.get("risk_note") or report.get("market_mood", ""), 260)
+    return "\n\n".join(
+        [
+            f"<b>[투자 브리핑] {escape(payload['report_date'])}</b>",
+            f"<b>1. 한 줄 결론</b>\n{escape(conclusion)}",
+            f"<b>2. 주식 핵심</b>\n{escape(stock_lines)}",
+            f"<b>3. 부동산 핵심</b>\n{escape(real_estate_lines)}",
+            f"<b>4. 오늘의 체크리스트</b>\n{escape(checklist_text)}",
+            f"<b>5. 오늘의 키워드</b>\n{escape(keyword_text)}",
+            f"<b>6. 주의점</b>\n{escape(risk_note)}",
+            f"<b>7. 상세 리포트</b>\n{detail_line}",
+        ]
     ).strip()
 
 

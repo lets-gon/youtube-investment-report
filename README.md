@@ -34,8 +34,8 @@ GitHub Actions가 매일 YouTube 채널 8개의 최근 24시간 콘텐츠를 확
    - 기본값은 `gpt-5.4-mini`입니다.
 4. Google Drive 자동 저장을 쓰려면 `Settings → Secrets and variables → Actions → Variables`에 아래 값을 추가합니다.
    - `GOOGLE_DRIVE_FOLDER_ID`: 저장할 Drive 폴더 ID
-   - 현재 `#1 Codex` 폴더 ID는 `1BARJn6eLdb_OL558mEDT3ztYWErYDBbR`입니다.
-5. Google Cloud에서 만든 서비스 계정 이메일을 Google Drive의 `#1 Codex` 폴더에 편집자 권한으로 공유합니다.
+   - 현재 `Second Brain/05_재정경제팀` 폴더 ID는 `14zWzMVn-SLsLYuB6mFVNOIm_lL_GnByK`입니다.
+5. Google Cloud에서 만든 서비스 계정 이메일을 Google Drive의 `Second Brain/05_재정경제팀` 폴더에 편집자 권한으로 공유합니다.
 6. `Actions → YouTube Investment Report → Run workflow`로 수동 실행해 테스트합니다.
 
 ## 저장 구조
@@ -79,10 +79,10 @@ out
 
 Google Drive 자동 저장을 켜면 위 `out/` 내부 구조가 지정한 Drive 폴더 안에 그대로 만들어집니다. 같은 경로의 파일이 이미 있으면 새 파일을 중복 생성하지 않고 갱신합니다.
 
-예를 들어 `#1 Codex` 폴더에는 아래처럼 저장됩니다.
+예를 들어 `Second Brain/05_재정경제팀` 폴더에는 아래처럼 저장됩니다.
 
 ```text
-#1 Codex
+05_재정경제팀
 ├── manifest
 │   ├── latest.json
 │   ├── drive_uploads.json
@@ -134,3 +134,6 @@ python youtube_report.py
 
 현재 `.github/workflows/youtube-report.yml`은 매일 08:50 KST에 실행됩니다.
 GitHub Actions의 cron은 UTC 기준이므로, KST에서 9시간을 빼서 적어야 합니다.
+
+GitHub Actions의 예약 실행은 GitHub 서버 상태에 따라 지연되거나 드물게 누락될 수 있습니다.
+그래서 텔레그램 전송이 안 보이면 먼저 `Actions → YouTube Investment Report`에서 그날 실행 기록이 있는지 확인합니다.
