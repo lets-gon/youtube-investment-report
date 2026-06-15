@@ -29,13 +29,13 @@ GitHub Actions가 매일 YouTube 채널 8개의 최근 24시간 콘텐츠를 확
    - `OPENAI_API_KEY`
    - `TELEGRAM_BOT_TOKEN`
    - `TELEGRAM_CHAT_ID`
-   - `GOOGLE_SERVICE_ACCOUNT_JSON`: Google Drive 업로드용 서비스 계정 JSON 전체 내용
+   - `GOOGLE_SERVICE_ACCOUNT_JSON`: Google Drive 업로드용 인증 JSON 전체 내용
 3. 필요하면 `Settings → Secrets and variables → Actions → Variables`에 `OPENAI_MODEL`을 추가합니다.
    - 기본값은 `gpt-5.4-mini`입니다.
 4. Google Drive 자동 저장을 쓰려면 `Settings → Secrets and variables → Actions → Variables`에 아래 값을 추가합니다.
    - `GOOGLE_DRIVE_FOLDER_ID`: 저장할 Drive 폴더 ID
    - 현재 `Second Brain/05_재정경제팀` 폴더 ID는 `14zWzMVn-SLsLYuB6mFVNOIm_lL_GnByK`입니다.
-5. Google Cloud에서 만든 서비스 계정 이메일을 Google Drive의 `Second Brain/05_재정경제팀` 폴더에 편집자 권한으로 공유합니다.
+5. 개인 Google Drive 폴더에 저장할 때는 사용자 OAuth JSON을 사용합니다. 서비스 계정은 개인 Drive 저장용량이 없어 My Drive 폴더에 직접 파일을 만들 수 없습니다.
 6. `Actions → YouTube Investment Report → Run workflow`로 수동 실행해 테스트합니다.
 
 ## 저장 구조

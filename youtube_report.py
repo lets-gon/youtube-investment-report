@@ -428,15 +428,22 @@ def drive_access_token() -> Optional[str]:
         return None
     try:
         from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
         from google.oauth2 import service_account
     except ImportError as exc:
         raise RuntimeError("Google Drive upload requires google-auth. Install requirements.txt first.") from exc
 
     credentials_info = json.loads(credentials_json)
-    credentials = service_account.Credentials.from_service_account_info(
-        credentials_info,
-        scopes=["https://www.googleapis.com/auth/drive"],
-    )
+    if credentials_info.get("type") == "service_account":
+        credentials = service_account.Credentials.from_service_account_info(
+            credentials_info,
+            scopes=["https://www.googleapis.com/auth/drive"],
+        )
+    else:
+        credentials = Credentials.from_authorized_user_info(
+            credentials_info,
+            scopes=["https://www.googleapis.com/auth/drive"],
+        )
     credentials.refresh(Request())
     return credentials.token
 
@@ -456,7 +463,15 @@ class GoogleDriveArchive:
             "mimeType = 'application/vnd.google-apps.folder' and "
             f"'{parent_id}' in parents and trashed = false"
         )
-        params = urllib.parse.urlencode({"q": query, "fields": "files(id,name)", "pageSize": "1"})
+        params = urllib.parse.urlencode(
+            {
+                "q": query,
+                "fields": "files(id,name)",
+                "pageSize": "1",
+                "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true",
+            }
+        )
         data = request_json(f"https://www.googleapis.com/drive/v3/files?{params}", token=self.token)
         files = data.get("files", [])
         if files:
@@ -468,7 +483,7 @@ class GoogleDriveArchive:
                 "parents": [parent_id],
             }
             data = request_json(
-                "https://www.googleapis.com/drive/v3/files?fields=id,name",
+                "https://www.googleapis.com/drive/v3/files?fields=id,name&supportsAllDrives=true",
                 method="POST",
                 token=self.token,
                 body=json.dumps(metadata).encode("utf-8"),
@@ -485,7 +500,15 @@ class GoogleDriveArchive:
 
     def find_file(self, parent_id: str, name: str) -> Optional[str]:
         query = f"name = '{self.escape_query(name)}' and '{parent_id}' in parents and trashed = false"
-        params = urllib.parse.urlencode({"q": query, "fields": "files(id,name)", "pageSize": "1"})
+        params = urllib.parse.urlencode(
+            {
+                "q": query,
+                "fields": "files(id,name)",
+                "pageSize": "1",
+                "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true",
+            }
+        )
         data = request_json(f"https://www.googleapis.com/drive/v3/files?{params}", token=self.token)
         files = data.get("files", [])
         return files[0]["id"] if files else None
@@ -507,10 +530,10 @@ class GoogleDriveArchive:
             f"Content-Type: {mime_type}\r\n\r\n"
         ).encode("utf-8") + content + f"\r\n--{boundary}--\r\n".encode("utf-8")
         if existing_id:
-            url = f"https://www.googleapis.com/upload/drive/v3/files/{existing_id}?uploadType=multipart&fields=id,name,webViewLink"
+            url = f"https://www.googleapis.com/upload/drive/v3/files/{existing_id}?uploadType=multipart&fields=id,name,webViewLink&supportsAllDrives=true"
             method = "PATCH"
         else:
-            url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink"
+            url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink&supportsAllDrives=true"
             method = "POST"
         data = request_json(
             url,
