@@ -462,6 +462,116 @@ def extract_json_document(text: str) -> dict:
     return json.loads(match.group(0))
 
 
+def report_json_schema() -> dict:
+    string_array = {"type": "array", "items": {"type": "string"}}
+    checklist_item = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "source_channel": {"type": "string"},
+            "content": {"type": "string"},
+        },
+        "required": ["source_channel", "content"],
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "report": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "title": {"type": "string"},
+                    "overall_summary": {"type": "string"},
+                    "stock_summary": {"type": "string"},
+                    "real_estate_summary": {"type": "string"},
+                    "market_mood": {"type": "string"},
+                },
+                "required": ["title", "overall_summary", "stock_summary", "real_estate_summary", "market_mood"],
+            },
+            "sections": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "title": {"type": "string"},
+                        "paragraphs": string_array,
+                    },
+                    "required": ["title", "paragraphs"],
+                },
+            },
+            "item_summaries": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "source_id": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "facts": string_array,
+                        "opnions": string_array,
+                        "insights": string_array,
+                        "recommendations": string_array,
+                        "risks": string_array,
+                        "keywords": string_array,
+                    },
+                    "required": ["source_id", "summary", "facts", "opnions", "insights", "recommendations", "risks", "keywords"],
+                },
+            },
+            "checklist": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "Fact": {"type": "array", "items": checklist_item},
+                    "Opnion": {"type": "array", "items": checklist_item},
+                    "Insight": {"type": "array", "items": checklist_item},
+                    "Recommendation": {"type": "array", "items": checklist_item},
+                },
+                "required": ["Fact", "Opnion", "Insight", "Recommendation"],
+            },
+            "keywords": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "keyword": {"type": "string"},
+                        "category": {"type": "string"},
+                        "note": {"type": "string"},
+                    },
+                    "required": ["keyword", "category", "note"],
+                },
+            },
+            "terms": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "term": {"type": "string"},
+                        "explanation": {"type": "string"},
+                        "source_context": {"type": "string"},
+                    },
+                    "required": ["term", "explanation", "source_context"],
+                },
+            },
+            "telegram": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "headline": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "keywords": string_array,
+                    "risk_note": {"type": "string"},
+                },
+                "required": ["headline", "summary", "keywords", "risk_note"],
+            },
+        },
+        "required": ["report", "sections", "item_summaries", "checklist", "keywords", "terms", "telegram"],
+    }
+
+
 def call_openai(prompt: str) -> str:
     api_key = re.sub(r"\s+", "", os.getenv("OPENAI_API_KEY", ""))
     if not api_key:
@@ -469,6 +579,14 @@ def call_openai(prompt: str) -> str:
     body = {
         "model": OPENAI_MODEL,
         "max_output_tokens": OPENAI_MAX_OUTPUT_TOKENS,
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "investment_report",
+                "strict": True,
+                "schema": report_json_schema(),
+            }
+        },
         "input": [
             {
                 "role": "developer",
