@@ -11,6 +11,7 @@ import ssl
 import sqlite3
 import sys
 import textwrap
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -27,7 +28,9 @@ UTC = timezone.utc
 KST = ZoneInfo("Asia/Seoul")
 WINDOW_HOURS = int(os.getenv("WINDOW_HOURS", "24"))
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
-MAX_COMMUNITY_POSTS = int(os.getenv("MAX_COMMUNITY_POSTS", "8"))
+MAX_COMMUNITY_POSTS = int(os.getenv("MAX_COMMUNITY_POSTS", "4"))
+OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "4200"))
+OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "3"))
 OUTPUT_ROOT = Path(os.getenv("OUTPUT_ROOT", "out"))
 GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
 HTTPS_CONTEXT: Optional[ssl.SSLContext] = None
@@ -96,7 +99,7 @@ def request_text(url: str, timeout: int = 25) -> str:
         return res.read().decode("utf-8", "ignore")
 
 
-def compact(value: str, limit: int = 1200) -> str:
+def compact(value: str, limit: int = 700) -> str:
     value = " ".join((value or "").split())
     return value[:limit]
 
@@ -237,7 +240,7 @@ def fetch_asset_posts() -> list[dict]:
                 "title": "asset.x2 커뮤니티 게시물",
                 "url": "https://www.youtube.com/@asset.x2/community",
                 "time": post["time"],
-                "content": compact(post["content"], 2200),
+                "content": compact(post["content"], 900),
                 "post_id": post_id,
             }
         )
@@ -262,7 +265,45 @@ def fetch_asset_posts_safely(errors: list[dict]) -> list[dict]:
         return []
 
 
+def prompt_payload(payload: dict) -> dict:
+    """Trim raw source data before sending it to the model."""
+    return {
+        "report_id": payload["report_id"],
+        "report_date": payload["report_date"],
+        "window": payload["window"],
+        "channels": payload["channels"],
+        "videos": [
+            {
+                "source_id": video["source_id"],
+                "item_type": video["item_type"],
+                "channel": video["channel"],
+                "kind": video["kind"],
+                "title": compact(video["title"], 180),
+                "url": video["url"],
+                "published_kst": video.get("published_kst", ""),
+                "description": compact(video.get("description", ""), 360),
+            }
+            for video in payload["videos"]
+        ],
+        "asset_x2_posts": [
+            {
+                "source_id": post["source_id"],
+                "item_type": post["item_type"],
+                "channel": post["channel"],
+                "kind": post["kind"],
+                "title": post["title"],
+                "url": post["url"],
+                "time": post.get("time", ""),
+                "content": compact(post.get("content", ""), 520),
+            }
+            for post in payload["asset_x2_posts"]
+        ],
+        "fetch_errors": payload["fetch_errors"],
+    }
+
+
 def build_prompt(payload: dict) -> str:
+    data = prompt_payload(payload)
     return textwrap.dedent(
         f"""
         아래 JSON은 YouTube RSS와 커뮤니티 게시물에서 수집한 최근 {WINDOW_HOURS}시간 투자 콘텐츠 데이터다.
@@ -320,9 +361,77 @@ def build_prompt(payload: dict) -> str:
         }}
 
         데이터:
-        {json.dumps(payload, ensure_ascii=False, indent=2)}
+        {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}
         """
     ).strip()
+
+
+def fallback_structured_report(payload: dict, reason: str) -> dict:
+    """Create a deterministic report when the OpenAI API is temporarily unavailable."""
+    items = source_items(payload)
+    stock_items = [item for item in items if item["category"] == "주식"]
+    real_estate_items = [item for item in items if item["category"] == "부동산"]
+
+    def item_summary(item: dict) -> dict:
+        base = compact(item.get("raw_description") or item.get("title", ""), 260)
+        summary = f"{item['title']}"
+        if base and base != item["title"]:
+            summary = f"{summary}: {base}"
+        return {
+            "source_id": item["item_id"],
+            "summary": compact(summary, 320),
+            "facts": [f"{item['channel_name']}에서 '{item['title']}' 항목이 수집됐다."],
+            "opnions": [],
+            "insights": ["OpenAI 한도 오류로 제목과 설명 기반의 임시 요약만 생성됐다."],
+            "recommendations": ["상세 투자 판단은 다음 정상 리포트 또는 원문 확인 후 진행한다."],
+            "risks": ["AI 분석이 완료되지 않은 임시 리포트다."],
+            "keywords": [item["channel_name"], item["category"]],
+        }
+
+    stock_channels = ", ".join(sorted({item["channel_name"] for item in stock_items})) or "신규 항목 없음"
+    real_estate_channels = ", ".join(sorted({item["channel_name"] for item in real_estate_items})) or "신규 항목 없음"
+    return {
+        "report": {
+            "title": f"{payload['report_date']} 투자 브리핑",
+            "overall_summary": "OpenAI 사용량 제한으로 전체 AI 요약은 생성되지 않았다. 대신 수집된 영상/게시물 목록과 원문 기반 임시 요약을 저장했다.",
+            "stock_summary": f"주식 항목은 {len(stock_items)}개 수집됐다. 출처: {stock_channels}",
+            "real_estate_summary": f"부동산 항목은 {len(real_estate_items)}개 수집됐다. 출처: {real_estate_channels}",
+            "market_mood": "OpenAI 한도 오류로 시장 분위기 해석은 보류한다.",
+        },
+        "sections": [
+            {
+                "title": "1. 한눈에 보는 핵심",
+                "paragraphs": [
+                    f"최근 {WINDOW_HOURS}시간 기준 수집은 완료됐지만 OpenAI API가 제한을 반환했다.",
+                    "이번 리포트는 자동화 중단을 막기 위한 임시 저장본이며, 다음 정상 실행 때 AI 분석본으로 갱신된다.",
+                ],
+            }
+        ],
+        "item_summaries": [item_summary(item) for item in items],
+        "checklist": {
+            "Fact": [{"source_channel": "자동화", "content": f"수집 항목 {len(items)}개가 저장됐다."}],
+            "Opnion": [{"source_channel": "자동화", "content": "OpenAI 한도 문제로 의견 분석은 생성하지 않았다."}],
+            "Insight": [{"source_channel": "자동화", "content": "자동화는 유지됐지만 AI 분석 품질은 일시적으로 낮아졌다."}],
+            "Recommendation": [{"source_channel": "자동화", "content": "OpenAI 사용 한도 상향 또는 입력 토큰 축소 상태를 확인한다."}],
+        },
+        "keywords": [
+            {"keyword": "OpenAI 한도", "category": "공통", "note": "API 429 발생"},
+            {"keyword": "임시 리포트", "category": "공통", "note": "원문 기반 저장본"},
+        ],
+        "terms": [
+            {
+                "term": "429",
+                "explanation": "API를 너무 많이 쓰거나 허용된 토큰 한도를 넘었을 때 나오는 오류 코드다.",
+                "source_context": compact(reason, 220),
+            }
+        ],
+        "telegram": {
+            "headline": f"{payload['report_date']} 투자 브리핑 임시 저장",
+            "summary": "OpenAI 사용량 제한으로 AI 상세 요약은 실패했지만, 수집 데이터와 임시 리포트는 저장했다.",
+            "keywords": ["OpenAI 한도", "임시 리포트"],
+            "risk_note": "오늘 메시지는 제목/설명 기반 임시 요약이므로 투자 판단에는 원문 확인이 필요하다.",
+        },
+    }
 
 
 def plain_text_report(message: str) -> str:
@@ -359,6 +468,7 @@ def call_openai(prompt: str) -> str:
         raise RuntimeError("OPENAI_API_KEY is not set")
     body = {
         "model": OPENAI_MODEL,
+        "max_output_tokens": OPENAI_MAX_OUTPUT_TOKENS,
         "input": [
             {
                 "role": "developer",
@@ -367,18 +477,29 @@ def call_openai(prompt: str) -> str:
             {"role": "user", "content": prompt},
         ],
     }
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=90, context=HTTPS_CONTEXT) as res:
-            data = json.loads(res.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "ignore")
-        raise RuntimeError(f"OpenAI API error: {exc.code} {detail}") from exc
+    data = None
+    for attempt in range(OPENAI_MAX_RETRIES + 1):
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/responses",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=90, context=HTTPS_CONTEXT) as res:
+                data = json.loads(res.read().decode("utf-8"))
+                break
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "ignore")
+            if exc.code == 429 and attempt < OPENAI_MAX_RETRIES:
+                retry_after = exc.headers.get("retry-after")
+                delay = int(retry_after) if retry_after and retry_after.isdigit() else min(60, 2**attempt * 10)
+                print(f"OpenAI rate limit hit; retrying in {delay}s ({attempt + 1}/{OPENAI_MAX_RETRIES}).", file=sys.stderr)
+                time.sleep(delay)
+                continue
+            raise RuntimeError(f"OpenAI API error: {exc.code} {detail}") from exc
+    if data is None:
+        raise RuntimeError("OpenAI request failed without a response")
     chunks = []
     for item in data.get("output", []):
         if item.get("type") == "message":
@@ -1099,7 +1220,11 @@ def main() -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
 
-    structured = extract_json_document(call_openai(build_prompt(payload)))
+    try:
+        structured = extract_json_document(call_openai(build_prompt(payload)))
+    except Exception as exc:
+        print(f"OpenAI report generation failed; creating fallback report. {type(exc).__name__}: {exc}", file=sys.stderr)
+        structured = fallback_structured_report(payload, f"{type(exc).__name__}: {exc}")
     items, insights, keywords, terms = normalize_outputs(payload, structured)
 
     html_path = paths["html"] / "report.html"
