@@ -29,7 +29,7 @@ KST = ZoneInfo("Asia/Seoul")
 WINDOW_HOURS = int(os.getenv("WINDOW_HOURS", "24"))
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
 MAX_COMMUNITY_POSTS = int(os.getenv("MAX_COMMUNITY_POSTS", "4"))
-OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "6500"))
+OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "8000"))
 OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "3"))
 OUTPUT_ROOT = Path(os.getenv("OUTPUT_ROOT", "out"))
 GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
@@ -313,6 +313,12 @@ def build_prompt(payload: dict) -> str:
         - 주식 채널 4개와 부동산 채널 4개를 구분한다.
         - 부동산 채널은 이미 게스트 영상이 제외된 상태다. 제외/없음도 짧게 언급한다.
         - 영상을 보지 않은 사람도 메시지를 이해하게 제목/설명/게시물 내용을 바탕으로 핵심 논리를 빠짐없이 정리한다.
+        - 전체 출력은 반드시 끝까지 완성한다. 길게 쓰기보다 끊기지 않는 완성 JSON을 우선한다.
+        - sections는 최대 3개, 각 paragraphs는 최대 2개로 제한한다.
+        - item_summaries의 summary는 항목당 450자 이내로 쓴다.
+        - facts/opnions/insights/recommendations/risks/keywords는 각각 최대 2개로 제한한다.
+        - checklist의 Fact/Opnion/Insight/Recommendation은 각각 최대 3개로 제한한다.
+        - keywords는 최대 8개, terms는 최대 6개로 제한한다.
         - 확실히 데이터에 없는 내용은 추정이라고 표현한다.
         - 'N가지', '6가지 원인', '3가지 핵심'처럼 숫자로 묶인 설명은 각 항목을 하나씩 풀어쓴다.
         - 고등학생이 모를 만한 용어는 terms 배열에 쉬운 설명으로 분리한다.
