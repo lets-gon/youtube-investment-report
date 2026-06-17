@@ -1268,6 +1268,16 @@ def render_telegram_messages(payload: dict, structured: dict, html_path: Path) -
             return text
         return text[: limit - 3].rstrip() + "..."
 
+    def shorten_complete(value: str, limit: int) -> str:
+        text = " ".join(str(value or "").split())
+        if len(text) <= limit:
+            return text
+        candidate = text[:limit].rstrip()
+        sentence_end = max(candidate.rfind("."), candidate.rfind("!"), candidate.rfind("?"), candidate.rfind("다."), candidate.rfind("요."))
+        if sentence_end >= int(limit * 0.55):
+            return candidate[: sentence_end + 1].rstrip()
+        return candidate.rstrip(" ,.;:") + "..."
+
     def category_lines(category: str, limit: int = 8) -> str:
         lines = []
         for summary in summaries:
@@ -1295,23 +1305,15 @@ def render_telegram_messages(payload: dict, structured: dict, html_path: Path) -
         summary = summary_lookup.get(item["item_id"], {})
         title = item.get("title", "")
         body = summary.get("summary") or item.get("raw_description") or "수집된 요약 없음"
-        facts = summary.get("facts", []) or []
-        insights = summary.get("insights", []) or []
-        recommendations = summary.get("recommendations", []) or []
-        risks = summary.get("risks", []) or []
+        context_parts = [body]
+        for key in ["insights", "recommendations", "risks"]:
+            context_parts.extend(summary.get(key, []) or [])
+        story = shorten_complete(" ".join(context_parts), 620)
         blocks = [
             f"<b>{escape(item['channel_name'])}</b>",
             f"제목: {escape(shorten(title, 180))}",
-            f"핵심 내용:\n{escape(shorten(body, 760))}",
+            f"핵심 내용:\n{escape(story)}",
         ]
-        if facts:
-            blocks.append("확인된 사실:\n" + escape("\n".join(f"- {shorten(v, 180)}" for v in facts[:3])))
-        if insights:
-            blocks.append("의미:\n" + escape("\n".join(f"- {shorten(v, 190)}" for v in insights[:3])))
-        if recommendations:
-            blocks.append("투자자 체크:\n" + escape("\n".join(f"- {shorten(v, 190)}" for v in recommendations[:3])))
-        if risks:
-            blocks.append("주의점:\n" + escape("\n".join(f"- {shorten(v, 170)}" for v in risks[:2])))
         if item.get("url"):
             blocks.append(f'<a href="{escape(item["url"])}">원문 보기</a>')
         return "\n\n".join(blocks)
