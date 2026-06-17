@@ -527,6 +527,13 @@ def send_telegram(message: str, parse_mode: Optional[str] = None) -> None:
         res.read()
 
 
+def send_telegram_messages(messages: list[str], parse_mode: Optional[str] = None) -> None:
+    for index, message in enumerate(messages):
+        send_telegram(message, parse_mode=parse_mode)
+        if index < len(messages) - 1:
+            time.sleep(0.8)
+
+
 def request_json(
     url: str,
     *,
@@ -1116,7 +1123,7 @@ def render_full_html(payload: dict, structured: dict, items: list[dict], insight
     )
 
 
-def render_telegram_html(payload: dict, structured: dict, html_path: Path) -> str:
+def render_telegram_messages(payload: dict, structured: dict, html_path: Path) -> list[str]:
     report = structured.get("report", {})
     telegram = structured.get("telegram", {})
     keywords = telegram.get("keywords") or [k.get("keyword") for k in structured.get("keywords", [])[:6]]
@@ -1129,6 +1136,7 @@ def render_telegram_html(payload: dict, structured: dict, html_path: Path) -> st
     )
     item_lookup = {item["item_id"]: item for item in source_items(payload)}
     summaries = structured.get("item_summaries", []) or []
+    summary_lookup = {summary.get("source_id"): summary for summary in summaries}
 
     def shorten(value: str, limit: int) -> str:
         text = " ".join(str(value or "").split())
@@ -1136,30 +1144,73 @@ def render_telegram_html(payload: dict, structured: dict, html_path: Path) -> st
             return text
         return text[: limit - 3].rstrip() + "..."
 
-    def category_lines(category: str, limit: int = 4) -> str:
+    def category_lines(category: str, limit: int = 8) -> str:
         lines = []
         for summary in summaries:
             item = item_lookup.get(summary.get("source_id"))
             if not item or item["category"] != category:
                 continue
             text = summary.get("summary") or item.get("raw_description") or "요약 없음"
-            lines.append(f"- {item['channel_name']}: {shorten(text, 190)}")
+            lines.append(f"- {item['channel_name']}: {shorten(text, 260)}")
             if len(lines) >= limit:
                 break
         return "\n".join(lines) if lines else "- 최근 24시간 기준으로 정리할 신규 항목이 없습니다."
 
-    def checklist_lines(section: str, limit: int = 2) -> str:
+    def checklist_lines(section: str, limit: int = 4) -> str:
         rows = []
         for row in (structured.get("checklist") or {}).get(section, []) or []:
             source = row.get("source_channel") or "출처 미상"
-            content = shorten(row.get("content", ""), 150)
+            content = shorten(row.get("content", ""), 220)
             if content:
                 rows.append(f"- {section}: {content} ({source})")
             if len(rows) >= limit:
                 break
         return "\n".join(rows) if rows else f"- {section}: 정리된 항목 없음"
 
-    conclusion = shorten(telegram.get("summary") or report.get("overall_summary", ""), 520)
+    def item_detail(item: dict) -> str:
+        summary = summary_lookup.get(item["item_id"], {})
+        title = item.get("title", "")
+        body = summary.get("summary") or item.get("raw_description") or "수집된 요약 없음"
+        facts = summary.get("facts", []) or []
+        insights = summary.get("insights", []) or []
+        recommendations = summary.get("recommendations", []) or []
+        risks = summary.get("risks", []) or []
+        blocks = [
+            f"<b>{escape(item['channel_name'])}</b>",
+            f"제목: {escape(shorten(title, 180))}",
+            f"핵심 내용:\n{escape(shorten(body, 760))}",
+        ]
+        if facts:
+            blocks.append("확인된 사실:\n" + escape("\n".join(f"- {shorten(v, 180)}" for v in facts[:3])))
+        if insights:
+            blocks.append("의미:\n" + escape("\n".join(f"- {shorten(v, 190)}" for v in insights[:3])))
+        if recommendations:
+            blocks.append("투자자 체크:\n" + escape("\n".join(f"- {shorten(v, 190)}" for v in recommendations[:3])))
+        if risks:
+            blocks.append("주의점:\n" + escape("\n".join(f"- {shorten(v, 170)}" for v in risks[:2])))
+        if item.get("url"):
+            blocks.append(f'<a href="{escape(item["url"])}">원문 보기</a>')
+        return "\n\n".join(blocks)
+
+    def detail_message(category: str, title: str) -> str:
+        category_items = [item for item in item_lookup.values() if item["category"] == category]
+        if not category_items:
+            return f"<b>{escape(title)}</b>\n최근 24시간 기준 신규 항목이 없습니다."
+        parts = [f"<b>{escape(title)}</b>"]
+        current = parts[0]
+        messages = []
+        for item in category_items:
+            detail = item_detail(item)
+            candidate = current + "\n\n" + detail
+            if len(candidate) > 3600 and current != parts[0]:
+                messages.append(current)
+                current = parts[0] + "\n\n" + detail
+            else:
+                current = candidate
+        messages.append(current)
+        return "\n\n".join(messages)
+
+    conclusion = shorten(telegram.get("summary") or report.get("overall_summary", ""), 760)
     stock_lines = category_lines("주식")
     real_estate_lines = category_lines("부동산")
     checklist_text = "\n".join(
@@ -1170,8 +1221,8 @@ def render_telegram_html(payload: dict, structured: dict, html_path: Path) -> st
             checklist_lines("Recommendation"),
         ]
     )
-    risk_note = shorten(telegram.get("risk_note") or report.get("market_mood", ""), 260)
-    return "\n\n".join(
+    risk_note = shorten(telegram.get("risk_note") or report.get("market_mood", ""), 420)
+    overview = "\n\n".join(
         [
             f"<b>[투자 브리핑] {escape(payload['report_date'])}</b>",
             f"<b>1. 한 줄 결론</b>\n{escape(conclusion)}",
@@ -1183,6 +1234,45 @@ def render_telegram_html(payload: dict, structured: dict, html_path: Path) -> st
             f"<b>7. 상세 리포트</b>\n{detail_line}",
         ]
     ).strip()
+    stock_detail = detail_message("주식", "주식 콘텐츠 상세")
+    real_estate_detail = detail_message("부동산", "부동산 콘텐츠 상세")
+    checklist = "\n\n".join(
+        [
+            f"<b>체크리스트</b>\n{escape(checklist_text)}",
+            f"<b>용어 설명</b>\n"
+            + escape(
+                "\n".join(
+                    f"- {term.get('term')}: {shorten(term.get('explanation', ''), 220)}"
+                    for term in (structured.get("terms") or [])[:8]
+                )
+                or "- 정리된 용어 없음"
+            ),
+            f"<b>상세 리포트</b>\n{detail_line}",
+        ]
+    ).strip()
+    messages = [overview, stock_detail, real_estate_detail, checklist]
+    split_messages = []
+    for message in messages:
+        if len(message) <= 3900:
+            split_messages.append(message)
+            continue
+        paragraphs = message.split("\n\n")
+        header = paragraphs[0] if paragraphs and paragraphs[0].startswith("<b>") else ""
+        current = ""
+        for paragraph in paragraphs:
+            candidate = paragraph if not current else current + "\n\n" + paragraph
+            if len(candidate) > 3600 and current:
+                split_messages.append(current)
+                current = f"{header}\n\n{paragraph}" if header and paragraph != header else paragraph
+            else:
+                current = candidate
+        if current:
+            split_messages.append(current)
+    return split_messages
+
+
+def render_telegram_html(payload: dict, structured: dict, html_path: Path) -> str:
+    return "\n\n--- 다음 텔레그램 메시지 ---\n\n".join(render_telegram_messages(payload, structured, html_path))
 
 
 def main() -> int:
@@ -1240,7 +1330,8 @@ def main() -> int:
 
     html_path.parent.mkdir(parents=True, exist_ok=True)
     html_path.write_text(render_full_html(payload, structured, items, insights, keywords, terms), encoding="utf-8")
-    telegram_html = render_telegram_html(payload, structured, html_path)
+    telegram_messages = render_telegram_messages(payload, structured, html_path)
+    telegram_html = "\n\n--- 다음 텔레그램 메시지 ---\n\n".join(telegram_messages)
     telegram_path.parent.mkdir(parents=True, exist_ok=True)
     telegram_path.write_text(telegram_html + "\n", encoding="utf-8")
 
@@ -1272,7 +1363,8 @@ def main() -> int:
         report_html_url = next((item["url"] for item in drive_uploads if item["drive_path"] == str(html_path.relative_to(OUTPUT_ROOT))), "")
         if report_html_url:
             os.environ["REPORT_HTML_URL"] = report_html_url
-            telegram_html = render_telegram_html(payload, structured, html_path)
+            telegram_messages = render_telegram_messages(payload, structured, html_path)
+            telegram_html = "\n\n--- 다음 텔레그램 메시지 ---\n\n".join(telegram_messages)
             telegram_path.write_text(telegram_html + "\n", encoding="utf-8")
         write_json(paths["manifest"] / "drive_uploads.json", drive_uploads)
         manifest_row["google_drive"] = {
@@ -1289,7 +1381,7 @@ def main() -> int:
         )
 
     print(telegram_html)
-    send_telegram(telegram_html, parse_mode="HTML")
+    send_telegram_messages(telegram_messages, parse_mode="HTML")
     return 0
 
 
