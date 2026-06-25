@@ -1,6 +1,6 @@
 # YouTube 투자 자동 보고
 
-GitHub Actions가 매일 YouTube 채널 8개의 최근 24시간 콘텐츠를 확인하고, OpenAI API로 한국어 보고서를 만든 뒤 텔레그램으로 보냅니다.
+GitHub Actions가 매일 YouTube 채널 8개의 최근 24시간 콘텐츠를 확인하고, 가능한 경우 YouTube 자막/자동자막을 먼저 수집한 뒤 OpenAI API로 한국어 보고서를 만들고 텔레그램으로 보냅니다.
 
 현재 산출물은 사람이 폴더를 직접 탐색하기보다 LLM과 자동화가 다시 파싱하기 쉬운 구조로 저장됩니다.
 
@@ -22,6 +22,18 @@ GitHub Actions가 매일 YouTube 채널 8개의 최근 24시간 콘텐츠를 확
 
 부동산 채널은 제목에 게스트 표기가 있는 영상은 제외합니다. `asset.x2`는 영상 RSS와 커뮤니티 게시물을 함께 확인합니다.
 
+## 요약 방식
+
+요약 근거는 아래 순서로 정해집니다.
+
+1. `자막 기반`: 영상의 공식 자막을 가져와 요약합니다.
+2. `자동자막 기반`: YouTube 자동자막을 가져와 요약합니다.
+3. `설명란 기반`: 자막이 없을 때 영상 설명란을 바탕으로 요약합니다.
+4. `제목만 확인`: 자막과 설명란이 모두 부족할 때 제목만 확인된 항목으로 표시합니다.
+5. `게시물 원문 기반`: `asset.x2` 커뮤니티 게시물처럼 영상이 아닌 글 원문을 요약합니다.
+
+텔레그램에는 영상별로 `요약 근거`, `영상 내용 요약`, `핵심 포인트`, `투자자 체크`가 표시됩니다. Google Drive HTML 보고서와 SQLite DB에는 자막/자동자막 일부와 상세 요약이 함께 저장됩니다.
+
 ## GitHub 설정
 
 1. 이 폴더를 GitHub 저장소로 올립니다.
@@ -32,6 +44,9 @@ GitHub Actions가 매일 YouTube 채널 8개의 최근 24시간 콘텐츠를 확
    - `GOOGLE_SERVICE_ACCOUNT_JSON`: Google Drive 업로드용 인증 JSON 전체 내용
 3. 필요하면 `Settings → Secrets and variables → Actions → Variables`에 `OPENAI_MODEL`을 추가합니다.
    - 기본값은 `gpt-5.4-mini`입니다.
+   - `MAX_TRANSCRIPT_CHARS`: DB에 저장할 영상별 자막 최대 길이입니다. 기본값은 `12000`입니다.
+   - `PROMPT_TRANSCRIPT_CHARS`: OpenAI 요약에 보낼 영상별 자막 최대 길이입니다. 기본값은 `5000`입니다.
+   - `TRANSCRIPT_LANGUAGES`: 우선 수집할 자막 언어입니다. 기본값은 `ko,en`입니다.
 4. Google Drive 자동 저장을 쓰려면 `Settings → Secrets and variables → Actions → Variables`에 아래 값을 추가합니다.
    - `GOOGLE_DRIVE_FOLDER_ID`: 저장할 Drive 폴더 ID
    - 현재 `Second Brain/05_재정경제팀` 폴더 ID는 `14zWzMVn-SLsLYuB6mFVNOIm_lL_GnByK`입니다.
@@ -70,9 +85,9 @@ out
 역할:
 
 - `manifest`: LLM이 어떤 날짜의 어떤 파일을 읽어야 하는지 찾는 색인입니다.
-- `raw`: YouTube RSS와 커뮤니티 게시물 원본 수집 데이터입니다.
+- `raw`: YouTube RSS, 자막/자동자막, 커뮤니티 게시물 원본 수집 데이터입니다.
 - `normalized`: LLM 파싱용 핵심 JSON/JSONL 데이터입니다.
-- `reports/html`: 사람이 읽는 상세 HTML 리포트입니다.
+- `reports/html`: Lillys AI처럼 영상별 흐름, 핵심 포인트, 투자자 체크를 읽는 상세 HTML 리포트입니다.
 - `reports/telegram`: 텔레그램으로 보낸 HTML 메시지 원본입니다.
 - `database`: SQLite 최신 누적본입니다.
 - `backups`: 날짜별 SQLite 백업입니다.
