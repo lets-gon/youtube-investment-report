@@ -41,7 +41,7 @@ jobs:
           MAX_TRANSCRIPT_CHARS: "12000"
           PROMPT_TRANSCRIPT_CHARS: "5000"
           TRANSCRIPT_LANGUAGES: "ko,en"
-        run: python youtube_report.py
+        run: python caption_report.py
 
       - name: Upload generated data archive
         uses: actions/upload-artifact@v7
