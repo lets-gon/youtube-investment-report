@@ -16,7 +16,7 @@ permissions:
 jobs:
   report:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -38,6 +38,9 @@ jobs:
           GOOGLE_DRIVE_FOLDER_ID: ${{ vars.GOOGLE_DRIVE_FOLDER_ID }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.4-mini' }}
           WINDOW_HOURS: "24"
+          MAX_TRANSCRIPT_CHARS: "12000"
+          PROMPT_TRANSCRIPT_CHARS: "5000"
+          TRANSCRIPT_LANGUAGES: "ko,en"
         run: python youtube_report.py
 
       - name: Upload generated data archive
